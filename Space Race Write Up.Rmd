@@ -1,0 +1,355 @@
+---
+title: 'Zero hour: 9:00 a.m.'
+author: "Sean"
+date: "5/11/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+## Searching for the Right Stuff
+
+Space is an interesting data topic to cover, especially since Aeronautical, Astrological, and Space Organizations have been actively collecting vast amounts of data for decades.  In fact, there's so much data floating around in _digital_ space that it became difficult to decide what this article's focus should be.  To put the data into some context, NASA alone has an open source repository of [~10,000 individual datasets](https://data.nasa.gov/).
+
+So to narrow my search, I decided to look at the foundational, and _**most explosive**_, aspect of Space Exploration - Rocketry. 
+
+```{r figurename, echo=FALSE, fig.cap="NASA Rocket Launch - https://www.nasa.gov/content/launch-images", out.width = '90%'}
+knitr::include_graphics("https://www.nasa.gov/sites/default/files/thumbnails/image/42374725534_a653d1b7cb_k.jpg")
+```
+
+
+In this search I found Jonathan McDowell's suborbital and orbital launch database at [planet4589.org](https://planet4589.org/space/lvdb/index.html).  This expansive dataset includes listing of 72,920 individual launches; cataloging information including launch date, vehicle, estimated apogeee, organization, and much more.
+
+## Houston we have a Problem
+
+Any dataset, especially one that is manually input over a long period of time, will have some inherent quirks that are difficult for computers to parse and analyze.  An example from this dataset is questionmarks added to the end of an Apogee measure (max altitude of the rocket in miles).   McDowell's notes explain that Apogee questionmarks are estimations with up to 20% error.  With that explanation, we humans can understand that an apogee of "100?" is an approximate number, but a computer would struggle to even recognize this as a number.  So to begin any analysis, we need to "clean" these values.
+
+Here's NASA solving the same square-peg, round-hole problem (just in a _**slightly**_ more critical situation).
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/ry55--J4_VQ" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+To succesfully analyze our data, we need change its format into something understandable by our computer language (in this case R).  With McDowell's detailed notes on his files and header information we can use our understanding of the data to manipulate it into a form that our computer can understand.  After converting our file formats, removing some characters, and filling in a few missing details (only 6 missing organizations of 72k entries) we're ready to go.
+
+## One Small Step
+
+Now that the data is relatively clean we can begin our analysis.  We'll start off simply by plotting all launch attempts through history.  This gives us a general view of the predominance of rocketry through time.
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(gganimate)
+library(gifski)
+library(pins)
+library(zoo)
+library(treemapify)
+library(networkD3)
+library(ggforce)
+
+# See Jupyter Notebook file for cleaning
+df0 <- read_csv('https://raw.githubusercontent.com/DataBrahs/Space/master/launch_test.csv') %>%
+  mutate(Agency = gsub("(.*?)(/.*)", "\\1", Agency),
+         Agency = gsub("\\?", "", Agency),
+         Agency = case_when(
+           LV_Type == 'Burya' ~ 'SU', # 5 Burya Rockets Were Unlabeled by Org
+           Launch_Tag == '2019-S81' ~ 'USAF', # 1 USAF Ballistic Missile Was Unlabeled
+           T ~ Agency
+         ))
+
+# Organization and Country lists
+df_org <- read_tsv('https://raw.githubusercontent.com/DataBrahs/Space/master/orgs.tsv') #tsv created from original Orgs TAR File
+df_cntry <- df_org %>% select(`#Code`,StateCode, ShortName, ShortEName) %>%
+  distinct()
+colnames(df_cntry) <- c('Agency','StateCode','AgencyName', 'StateName')
+
+Europe <- c('Germany', 'Germany (Reich)', 'Greece', 'Poland',
+                     'France','Denmark','ELDO','ESA', 'East Germany',
+                     'ESRO','Italy','Norway','Spain',
+                     'Sweden','Switzerland', 'UK')
+Asia <- c('India','Pakistan','North Korea',
+                     'Taiwan','China','Indonesia',
+                     'India','South Korea','Japan')
+MidEast <- c('Egypt','Iran','Israel','Lebanon',
+                     'Iraq','Yemen','Libya',
+                     'Syria')
+Americas <- c('Brazil','Argentina', 'Canada', 'Cayman Is.')
+Oceania <- c('Australia','New Zealand')
+
+df_codes <- df_cntry %>%
+  filter(Agency == StateCode) %>%
+  select(StateCode, StateName)
+
+
+#Building Initial Dataframes
+df0 <- left_join(df0,df_cntry) %>%
+  drop_na(StateCode) # Bunch of random NA Rows
+
+df0a <- df0 %>%
+  mutate(Year = substring(Launch_Date, 1, 4), # First portion of mutate to convert time to columns
+         Month = substring(Launch_Date, 6, 8),
+         Day = substring(Launch_Date, 10, 11),
+         Hour = substring(Launch_Date, 13, 14),
+         Minute = substring(Launch_Date, 15, 16),
+         Decade = paste(substring(Year, 1, 3), "0", sep = ''), # Add Decade Variable 
+         M_Type = substring(Laun, 1, 1),
+         Outcome = substring(Laun, 2, 2),
+         Apogee = as.numeric(gsub("\\?", "", Apogee))) # Remove Question Marks from Apogee 
+
+# As.date(paste(year,mo,sep="-"),format ="%Y-%b
+launch_by_agency <- function(data){
+  df2 <- data %>%  #Group By Agency and Launch Year
+    mutate(StateCode = case_when(
+      Decade < '1990' & StateCode == 'RU' ~ 'SU',
+      Decade >= '1990' & StateCode == 'SU' ~ 'RU',
+      T ~ StateCode
+    )) %>%
+    group_by(AgencyName, StateCode, Decade, Year) %>%
+    summarize(yr_launch = n())
+  
+  return(df2)
+}
+
+df_ann_join <- launch_by_agency(df0a)
+
+df_mrn <- df_ann_join %>%
+  filter(AgencyName == 'MRN') %>%
+  mutate(Year = as.numeric(Year))
+
+df_ann_plt <- df_ann_join %>%
+  group_by(Year) %>%
+  summarize(yr_launch = sum(yr_launch)) %>%
+  mutate(Year = as.numeric(Year))
+
+df_fail_join <- launch_by_agency(filter(df0a, Outcome %in% c('F','E')))
+
+df_fail_plt <- df_fail_join %>%
+  group_by(Year) %>%
+  summarize(yr_launch = sum(yr_launch)) %>%
+  mutate(Year = as.numeric(Year))
+
+ggplot() +
+  geom_path(data = df_ann_plt, aes(x = Year, y = yr_launch), color = 'black', size = 1.5) +
+  #geom_path(data = df_fail_plt, aes(x = Year, y = yr_launch), color = 'red', size = 1.5) +
+  labs(title = 'All Rocket Launches by Year', x = 'Year', y ='Launches') +
+  theme_bw()
+```
+
+In this chart, we see a sharp increase in the usage of rockets during their initial development and then a steady decline to a relative steady state.  In the plot we can see that the peak rocket usage was during the 1970s.
+
+But what's the major factor that caused this peak?  Was it the height of the cold war?  A race to get more satellites?  ICBM testing?  To get a better understanding of what was driving this increase we broke our data down to individual organizations.  What we found was something rather interesting.
+
+```{r}
+ggplot() +
+  geom_path(data = df_ann_plt, aes(x = Year, y = yr_launch), color = 'black', size = 1.25) +
+  geom_bar(data = df_mrn, aes(x = Year, y = yr_launch, fill = AgencyName), stat = 'identity') +
+  labs(title = 'All Rocket Launches by Year', x = 'Year', y ='Launches', fill = 'Top Organization') +
+  theme_bw() +
+  theme(legend.position = 'bottom')
+```
+
+Here we see the massive increase in launches during the 70s is driven by one organization.  A little known US organization called the Meteorological Rocket Network, which comprised of members from different military, meteorological, and scientific agencies.  Their aim was to measure atmospheric conditions in the areas between weather balloons and satellites.  What's really shocking is that MRN accounts for 33% of the world's total rocket launches, but still doesn't warrant it's own wikipedia page _(maybe a project for later)_.  Below are some more details on their launches.
+
+### MRN by the Numbers
+
+```{r}
+mrn <- df0a %>% 
+  filter(AgencyName == 'MRN')
+```
+Meteorological Rocket Network:
+
+Total Launches : ``r nrow(mrn)``
+
+Total Launches >100 Apogee : ``r nrow(filter(mrn, Apogee > 100))``
+
+Mean Launch Apogee : ``r mean(mrn$Apogee)``
+
+Max Launch Apogee : ``r max(mrn$Apogee)``
+
+Launches by Vehicle Type :
+```{r} 
+table(mrn$LV_Type)
+```
+
+
+## Bigger is Better
+
+We've seen that a large number of smaller launches can have a big effect on the view of the rocketry landscape.  So, we'll focus the remainder of our analysis on the major rocket launches, that we define as successful launches that achieved an estimated apogee of 100 miles or greater, which includes orbital and suborbital launches.  Of all launches, 22,314 meet this criteria.  Our first look will be launches divided by the US, USSR/Russia, and the continents.  This will let us see patterns by regions throughout the years.
+
+```{r}
+launch_by_year <- function(data){
+  df2 <- launch_by_agency(data)
+  
+  df_join <- expand.grid(Year = as.character(seq(min(df2$Year),
+                                                 max(df2$Year), by =1)),
+                         AgencyName = unique(df2$AgencyName)) %>%
+    left_join(df2, by = c("Year","AgencyName")) %>%
+    mutate(yr_launch = case_when(
+      is.na(yr_launch) == T ~ as.numeric(0),
+      T ~ as.numeric(yr_launch))) %>%
+    group_by(AgencyName, Decade) %>%
+    mutate(launches = cumsum(yr_launch)) %>%  
+    mutate(grtr_1 = case_when(
+      launches > 1 ~ 1,
+      T ~ 0
+    )) %>%
+    group_by(AgencyName, grtr_1) %>%
+    mutate(count_1 = seq(n())) %>%
+    ungroup() %>%
+    filter(grtr_1 == 1)
+  
+  return(df_join)}
+
+bar_df <- function(data){
+  df_join <- launch_by_year(data)
+  
+  df_decade <- df_join %>%
+    group_by(AgencyName, Decade) %>%
+    filter(row_number() == n()) %>%
+    left_join(df_cntry) %>%
+    distinct(AgencyName, .keep_all = T) %>%
+    select(-StateName) %>% 
+    mutate(StateCode = case_when(
+      Decade < '1990' & StateCode == 'RU' ~ 'SU',
+      Decade >= '1990' & StateCode == 'SU' ~ 'RU',
+      T ~ StateCode
+    )) %>%
+    left_join(df_codes, by =c ('StateCode', 'StateCode')) %>%
+    select(AgencyName, Decade, launches, StateName) %>%
+    arrange(Decade, StateName, AgencyName)
+  
+  
+  df_dcd_cntry <- df_decade %>%
+    group_by(Decade, StateName) %>%
+    summarize(launches = sum(launches)) %>%
+    mutate(main = case_when(
+      StateName == 'USA' ~ 'USA',
+      StateName %in% c('USSR','Russia') ~ 'Russia/USSR',
+      StateName %in% Europe  ~ 'Europe (Not Russia)',
+      StateName %in% MidEast ~ 'Mid-East',
+      StateName %in% Asia ~ 'Asia',
+      StateName %in% Americas ~ 'Americas (Not USA)',
+      StateName %in% Oceania ~ 'Oceania',
+      T ~ StateName
+    )) %>%
+    filter(Decade != '2020')
+return(list(first = df_dcd_cntry, second = df_decade))
+}
+
+
+df1 <- df0a %>%
+  filter(Apogee >= 100 & Outcome == 'S')
+
+df_dcd_cntry <- bar_df(df1)$first
+df_decade <- bar_df(df1)$second
+
+
+ggplot(data=df_dcd_cntry, aes(x = Decade, y = launches, fill = main), color = main) + 
+  geom_bar(position="stack", stat="identity") +
+  scale_fill_hue(l=50, h.start = 250) +
+  scale_color_hue(l=50, h.start = 250) +
+  labs(title = 'Major Rocket Launches by Decade', y = '# of Launches', x = '',
+       caption = 'Major Rocket Launch is any launch > 100 Miles Apogee',
+       fill = 'Area') + theme(legend.position="right") +
+  theme_light()
+```
+
+Now we see that the most active period for major launches was in 1960s.  In general, this makes sense as it was during the development of the ICBMs and the height of the space race between the US and the USSR.
+
+Looking into the space race a little closer, we'll now look at the proportion of the launches by region to see who was leading in each decade.
+
+```{r}
+ggplot(data=df_dcd_cntry, aes(x = Decade, y = launches, fill = main), color = main) + 
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_hue(l=50, h.start = 250) +
+  scale_color_hue(l=50, h.start = 250) +
+  labs(title = 'Major Rocket Launches by Decade', y = '# of Launches', x = '',
+       caption = 'Major Rocket Launch is any launch > 100 Apogee',
+       fill = 'Area') + theme(legend.position="right") +
+  theme(axis.line.y = 'none', axis.text.y = 'none') +
+  theme_light()
+```
+
+We see from here that as we would expect, the US and USSR had a back and forth battle for space dominance.  Following the USSR's collapse, the USA has maintained the largest space presence (and thanks to SpaceX will be returning to our manned missions on 27 May 2020).  We also see an increase in Asia's presence Space Operations as we come to modern times.
+
+Now we'll pick some of the more interesting decades and see how the individual organizations and nations compare with each other.
+
+### The Eagle has landed - 1960s
+
+Our first snapshot will be during the height of the space race.  In this period the USA launched 4,264 rockets compared to 2,178 from the Soviet Union and only 1,119 from the rest of the world.
+
+```{r}
+df_plt <- filter(df_decade, Decade == '1960')
+
+bb <- ggplot(data = df_plt)
+
+bb + geom_treemap(aes(area = launches, subgroup = StateName, fill = StateName)) + 
+  geom_treemap_text(aes(area = launches, subgroup = StateName, label = AgencyName), alpha = .8,
+                    color = 'white', reflow = T, place = 'bottomleft') +
+  geom_treemap_subgroup_text(aes(area = launches, subgroup = StateName, label = AgencyName), 
+                             alpha = .9, place = 'center') +
+  theme(legend.position = 'none') +
+  labs(title = 'Major Launches in the 1960s', 
+       caption = paste('Total > 100 Apogee Launches =',
+                       as.character(sum(df_plt$launches))))  +
+  scale_fill_hue(l=50, h.start = 270)
+```
+
+Major organizations in this era include NASA, the DoD, and the Soviet RSVN Strategic Missile Forces.
+
+### Before the Fall - 1980s
+
+The decade the US was really out-rocketed.  Here we see the Soviet Union launched 2058 rockets compared to the USA's 990.
+
+```{r}
+df_plt <- filter(df_decade, Decade == '1980')
+
+bb <- ggplot(data = df_plt)
+
+bb + geom_treemap(aes(area = launches, subgroup = StateName, fill = StateName)) + 
+  geom_treemap_text(aes(area = launches, subgroup = StateName, label = AgencyName), alpha = .8,
+                    color = 'white', reflow = T, place = 'bottomleft') +
+  geom_treemap_subgroup_text(aes(area = launches, subgroup = StateName, label = AgencyName), 
+                             alpha = .9, place = 'center') +
+  theme(legend.position = 'none') +
+  labs(title = 'Major Launches in the 2010s', 
+       caption = paste('Total > 100 Apogee Launches =',
+                       as.character(sum(df_plt$launches))))  +
+  scale_fill_hue(l=50, h.start = 270)
+```
+
+Are top organizations in this period are the RVSN, the Soviet UNKS space agency, and NASA.
+
+### Rise of Commercial Rocketry - 2010s
+
+Finally, it's time to see what the modern landscape of rocketry.  Two interesting developments can be seen during this decade.  First, is the increase in commercial activity; with ULA (60 w/ LMA, 36 w/ Boeing),  ArianeSpace (84), SpaceX (69), and Blue Origin (9) leading the way.  Second, is the increased number of launches from Asia with 227 from China, 107 from India, 51 from Japan, and 46 from North Korea.
+
+```{r}
+df_plt <- filter(df_decade, Decade == '2010')
+
+bb <- ggplot(data = df_plt)
+
+bb + geom_treemap(aes(area = launches, subgroup = StateName, fill = StateName)) + 
+  geom_treemap_text(aes(area = launches, subgroup = StateName, label = AgencyName), alpha = .8,
+                    color = 'white', reflow = T, place = 'bottomleft') +
+  geom_treemap_subgroup_text(aes(area = launches, subgroup = StateName, label = AgencyName), 
+                             alpha = .9, place = 'center') +
+  theme(legend.position = 'none') +
+  labs(title = 'Major Launches in the 2010s', 
+       caption = paste('Total >= 100 Apogee Launches =',
+                       as.character(sum(df_plt$launches))))  +
+  scale_fill_hue(l=50, h.start = 270)
+```
+
+## The Final Frontier
+
+So far we've only scratched the surface of this dataset.  From this initial bit of discovery, I've identified some potential future projects that include analysis of orbital flights, missile launches, and successes/failures.
+
+Thanks for the reading.
